@@ -81,6 +81,11 @@ class SeahawksClient:
                 except Exception as e:
                     print(f"Erreur lors du traitement de l'hôte {host}: {str(e)}")
             
+            # Envoyer les appareils au serveur
+            if devices:
+                print(f"Envoi de {len(devices)} appareils au serveur...")
+                self.send_devices_to_server(devices)
+            
             return devices
         except Exception as e:
             print(f"Erreur lors du scan réseau: {str(e)}")
@@ -160,8 +165,13 @@ class SeahawksClient:
         }
         
         try:
-            response = requests.post(f"{self.server_url}/api/wans/{self.client_id}/devices", json=data)
-            return response.status_code == 200
+            response = requests.post(f"{self.server_url}/api/devices/update", json=data)
+            if response.status_code == 200:
+                print("Appareils envoyés avec succès")
+                return True
+            else:
+                print(f"Erreur lors de l'envoi des appareils. Code : {response.status_code}")
+                return False
         except Exception as e:
             print(f"Erreur lors de l'envoi des appareils : {str(e)}")
             return False
