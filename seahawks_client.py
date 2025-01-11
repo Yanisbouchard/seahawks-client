@@ -30,18 +30,30 @@ class SeahawksClient:
     def get_network_info(self):
         """Récupère les informations réseau"""
         hostname = socket.gethostname()
-        ip = socket.gethostbyname(hostname)
         
-        # Trouver le sous-réseau
+        # Obtenir toutes les interfaces réseau
         network_interfaces = psutil.net_if_addrs()
+        
+        # Trouver la première interface avec une IPv4
+        ip = None
         subnet = None
         for interface, addrs in network_interfaces.items():
             for addr in addrs:
-                if addr.family == socket.AF_INET and addr.address == ip:
-                    subnet = f"{'.'.join(ip.split('.')[:3])}.0/24"
-                    break
-            if subnet:
+                if addr.family == socket.AF_INET:
+                    ip = addr.address
+                    # Calculer le sous-réseau à partir de l'IP
+                    if ip:
+                        subnet = f"{'.'.join(ip.split('.')[:3])}.0/24"
+                        break
+            if ip and subnet:
                 break
+        
+        # Si on n'a pas trouvé d'IP, utiliser l'IP locale
+        if not ip:
+            ip = socket.gethostbyname(hostname)
+            subnet = f"{'.'.join(ip.split('.')[:3])}.0/24"
+        
+        print(f"Informations réseau détectées : IP={ip}, Subnet={subnet}")
                 
         return {
             'hostname': hostname,
