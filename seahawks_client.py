@@ -7,6 +7,7 @@ import psutil
 import nmap
 import argparse
 import requests
+import threading
 from datetime import datetime
 from flask import Flask, jsonify, request
 
@@ -19,6 +20,7 @@ class SeahawksClient:
         self.location = location
         self.client_id = self.get_or_create_client_id()
         self.nm = nmap.PortScanner()
+        self.running = True
         
     def get_or_create_client_id(self):
         """Récupère ou crée un ID unique pour ce client"""
@@ -128,16 +130,29 @@ class SeahawksClient:
         except Exception as e:
             print(f"Erreur lors de l'envoi des appareils : {str(e)}")
         return False
+
+    def ping_server(self):
+        """Envoie un ping au serveur pour maintenir le statut online"""
+        while self.running:
+            try:
+                self.register_with_server()
+            except Exception as e:
+                print(f"Erreur lors du ping : {str(e)}")
+            time.sleep(1)  # Ping toutes les secondes
     
     def start_monitoring(self, update_interval=60):
         """Démarre le monitoring en continu"""
         if self.register_with_server():
             print(f"Client enregistre avec succes. ID: {self.client_id}")
-            while True:
+            
+            # Démarrer le thread de ping
+            ping_thread = threading.Thread(target=self.ping_server)
+            ping_thread.daemon = True
+            ping_thread.start()
+            
+            # Boucle principale pour le scan réseau
+            while self.running:
                 try:
-                    # Re-enregistrement périodique pour maintenir le statut "online"
-                    self.register_with_server()
-                    
                     # Scan et envoi des appareils
                     devices = self.scan_network()
                     self.send_devices(devices)
@@ -146,6 +161,7 @@ class SeahawksClient:
                     time.sleep(update_interval)
                 except KeyboardInterrupt:
                     print("\nArrêt du monitoring...")
+                    self.running = False
                     break
                 except Exception as e:
                     print(f"Erreur lors du monitoring : {str(e)}")
