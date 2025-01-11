@@ -31,27 +31,18 @@ class SeahawksClient:
         """Récupère les informations réseau"""
         hostname = socket.gethostname()
         
-        # Obtenir toutes les interfaces réseau
-        network_interfaces = psutil.net_if_addrs()
-        
-        # Trouver la première interface avec une IPv4
-        ip = None
-        subnet = None
-        for interface, addrs in network_interfaces.items():
-            for addr in addrs:
-                if addr.family == socket.AF_INET:
-                    ip = addr.address
-                    # Calculer le sous-réseau à partir de l'IP
-                    if ip:
-                        subnet = f"{'.'.join(ip.split('.')[:3])}.0/24"
-                        break
-            if ip and subnet:
-                break
-        
-        # Si on n'a pas trouvé d'IP, utiliser l'IP locale
-        if not ip:
+        # Créer une connexion temporaire pour obtenir l'IP réelle
+        try:
+            temp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            temp_socket.connect(('8.8.8.8', 80))
+            ip = temp_socket.getsockname()[0]
+            temp_socket.close()
+        except:
+            # Fallback sur l'IP hostname si la connexion échoue
             ip = socket.gethostbyname(hostname)
-            subnet = f"{'.'.join(ip.split('.')[:3])}.0/24"
+        
+        # Calculer le sous-réseau
+        subnet = f"{'.'.join(ip.split('.')[:3])}.0/24"
         
         print(f"Informations réseau détectées : IP={ip}, Subnet={subnet}")
                 
@@ -67,21 +58,31 @@ class SeahawksClient:
         if not network_info['subnet']:
             return []
             
-        self.nm.scan(hosts=network_info['subnet'], arguments='-sn')
+        print(f"Scan du réseau {network_info['subnet']}...")
         
-        devices = []
-        for host in self.nm.all_hosts():
-            if 'mac' in self.nm[host]['addresses']:
-                device = {
-                    'ip': host,
-                    'hostname': self.nm[host].hostname(),
-                    'mac': self.nm[host]['addresses']['mac'],
-                    'vendor': self.nm[host]['vendor'].get(self.nm[host]['addresses']['mac'], 'Unknown'),
-                    'status': 'up' if self.nm[host]['status']['state'] == 'up' else 'down'
-                }
-                devices.append(device)
-        
-        return devices
+        try:
+            # Arguments nmap : -sn = ping scan, -n = no DNS resolution
+            self.nm.scan(hosts=network_info['subnet'], arguments='-sn -n')
+            
+            devices = []
+            for host in self.nm.all_hosts():
+                try:
+                    device = {
+                        'ip': host,
+                        'hostname': self.nm[host].hostname() or 'Unknown',
+                        'mac': self.nm[host]['addresses'].get('mac', 'Unknown'),
+                        'vendor': self.nm[host]['vendor'].get(self.nm[host]['addresses'].get('mac', ''), 'Unknown'),
+                        'status': 'up' if self.nm[host]['status']['state'] == 'up' else 'down'
+                    }
+                    print(f"Appareil trouvé : {device}")
+                    devices.append(device)
+                except Exception as e:
+                    print(f"Erreur lors du traitement de l'hôte {host}: {str(e)}")
+            
+            return devices
+        except Exception as e:
+            print(f"Erreur lors du scan réseau: {str(e)}")
+            return []
     
     def check_latency(self):
         """Vérifie la latence vers Google DNS"""
