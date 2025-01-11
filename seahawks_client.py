@@ -8,26 +8,34 @@ import nmap
 import psutil
 from ping3 import ping
 from datetime import datetime
+from flask import Flask, jsonify, request
+import hashlib
 
 class SeahawksClient:
     def __init__(self, server_url, name, location):
+        """Initialise le client Seahawks"""
         self.server_url = server_url
         self.name = name
         self.location = location
-        self.client_id = None  # Sera défini lors de l'enregistrement
+        self.client_id = None
         self.nm = nmap.PortScanner()
+        self.app = Flask(__name__)
+        
+        # Ajout des routes
+        self.app.add_url_rule('/api/scan', view_func=self.force_scan, methods=['POST'])
+        self.app.add_url_rule('/api/scan_ports', view_func=self.scan_ports_endpoint, methods=['POST'])
         
     def get_or_create_client_id(self):
         """Récupère ou crée un ID unique pour ce client"""
-        id_file = 'client_id.txt'
-        if os.path.exists(id_file):
-            with open(id_file, 'r') as f:
-                return f.read().strip()
-        
-        client_id = str(uuid.uuid4())
-        with open(id_file, 'w') as f:
-            f.write(client_id)
-        return client_id
+        try:
+            # Utiliser l'adresse IP comme identifiant unique
+            ip = socket.gethostbyname(socket.gethostname())
+            # Créer un hash unique basé sur l'IP
+            client_id = hashlib.md5(ip.encode()).hexdigest()
+            return client_id
+        except Exception as e:
+            print(f"Erreur lors de la création de l'ID client: {str(e)}")
+            return None
     
     def get_network_info(self):
         """Récupère les informations réseau"""
@@ -107,7 +115,7 @@ class SeahawksClient:
         
         # Générer un ID unique basé sur l'adresse MAC et l'hostname
         mac = self.get_mac_address()
-        self.client_id = f"{mac}_{network_info['hostname']}"
+        self.client_id = self.get_or_create_client_id()
         
         data = {
             'client_id': self.client_id,
@@ -165,31 +173,52 @@ class SeahawksClient:
         }
         
         try:
-            response = requests.post(f"{self.server_url}/api/devices/update", json=data)
-            if response.status_code == 200:
-                print("Appareils envoyés avec succès")
-                return True
-            else:
+            response = requests.post(f"{self.server_url}/api/wans/{self.client_id}/devices", json=data)
+            if response.status_code == 404:
+                # Si le WAN n'est pas trouvé, on le réenregistre
+                self.register_with_server()
+                # On réessaie d'envoyer les appareils
+                response = requests.post(f"{self.server_url}/api/wans/{self.client_id}/devices", json=data)
+                
+            if not response.ok:
                 print(f"Erreur lors de l'envoi des appareils. Code : {response.status_code}")
                 return False
+                
+            print("Appareils envoyés avec succès")
+            return True
         except Exception as e:
             print(f"Erreur lors de l'envoi des appareils : {str(e)}")
             return False
     
     def send_update(self):
         """Envoie une mise à jour au serveur"""
-        data = {
-            'client_id': self.client_id,
-            'timestamp': datetime.now().isoformat(),
-            'latency': self.check_latency(),
-            'devices': self.scan_network()
-        }
-        
         try:
-            response = requests.post(f"{self.server_url}/api/update", json=data)
-            return response.status_code == 200
+            # Scan du réseau
+            devices = self.scan_network()
+            
+            # Préparer les données
+            data = {
+                'client_id': self.client_id,
+                'timestamp': datetime.now().isoformat(),
+                'latency': self.check_latency(),
+                'devices': devices
+            }
+            
+            # Envoyer les appareils
+            devices_response = requests.post(f"{self.server_url}/api/wans/{self.client_id}/devices", json=data)
+            if devices_response.status_code == 404:
+                # Si le WAN n'est pas trouvé, on le réenregistre
+                self.register_with_server()
+                # On réessaie d'envoyer les appareils
+                devices_response = requests.post(f"{self.server_url}/api/wans/{self.client_id}/devices", json=data)
+                
+            if not devices_response.ok:
+                print(f"Erreur lors de l'envoi des appareils. Code : {devices_response.status_code}")
+                return False
+                
+            return True
         except Exception as e:
-            print(f"Erreur lors de la mise à jour: {str(e)}")
+            print(f"Erreur lors de l'envoi de la mise à jour: {str(e)}")
             return False
     
     def start_monitoring(self, update_interval=60):
@@ -197,6 +226,52 @@ class SeahawksClient:
         while True:
             self.send_update()
             time.sleep(update_interval)
+    
+    def scan_ports(self, ip):
+        """Scan les ports d'une IP spécifique"""
+        try:
+            # Scan des ports communs
+            self.nm.scan(ip, arguments='-sS -F')
+            
+            ports = []
+            if ip in self.nm.all_hosts():
+                for proto in self.nm[ip].all_protocols():
+                    ports_list = sorted(self.nm[ip][proto].keys())
+                    for port in ports_list:
+                        state = self.nm[ip][proto][port]['state']
+                        service = self.nm[ip][proto][port].get('name', '')
+                        ports.append({
+                            'port': port,
+                            'protocol': proto,
+                            'state': state,
+                            'service': service
+                        })
+            return ports
+        except Exception as e:
+            print(f"Erreur lors du scan des ports: {str(e)}")
+            return []
+            
+    def force_scan(self):
+        """Force un scan réseau"""
+        try:
+            devices = self.scan_network()
+            return jsonify({'success': True, 'devices': devices})
+        except Exception as e:
+            print(f"Erreur lors du scan: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+            
+    def scan_ports_endpoint(self):
+        """Endpoint pour scanner les ports d'une IP"""
+        try:
+            ip = request.json.get('ip')
+            if not ip:
+                return jsonify({'error': 'IP manquante'}), 400
+                
+            ports = self.scan_ports(ip)
+            return jsonify({'success': True, 'ports': ports})
+        except Exception as e:
+            print(f"Erreur lors du scan des ports: {str(e)}")
+            return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     import argparse
@@ -214,3 +289,4 @@ if __name__ == '__main__':
         client.start_monitoring()
     else:
         print("Echec de l'enregistrement du client")
+    client.app.run(debug=True)

@@ -1,47 +1,57 @@
-# Seahawks Network Monitor - Client
+# Seahawks Client
 
-Client de monitoring réseau pour Seahawks Network Monitor.
+## Version 3.0.0
 
-## Prérequis
-
-1. Python 3.x
-2. nmap installé sur le système
-3. Les dépendances Python listées dans requirements.txt
+Client de monitoring réseau pour l'application Seahawks. Ce client permet de :
+- Scanner automatiquement le réseau local
+- Détecter les appareils connectés
+- Envoyer les informations au serveur Seahawks
+- Surveiller la latence et l'état de la connexion
 
 ## Installation
 
-### Sur Debian/Ubuntu :
+1. Cloner le dépôt :
 ```bash
-# Installation de Python et pip
-apt install python3-pip
-
-# Installation de nmap
-apt install nmap
-
-# Installation des dépendances Python
-pip3 install -r requirements.txt
+git clone https://github.com/votre-repo/seahawks-client.git
+cd seahawks-client
 ```
 
-### Sur Windows :
-1. Installer Python depuis [python.org](https://www.python.org/downloads/)
-2. Installer nmap depuis [nmap.org](https://nmap.org/download.html)
-3. Installer les dépendances :
+2. Installer les dépendances :
 ```bash
 pip install -r requirements.txt
 ```
 
+## Configuration
+
+1. Modifier le fichier `config.json` avec l'adresse de votre serveur :
+```json
+{
+    "server_url": "http://votre-serveur:5000"
+}
+```
+
 ## Utilisation
 
+1. Lancer le client :
 ```bash
-python3 seahawks_client.py --server http://IP_DU_SERVEUR:5000 --name "Nom du WAN" --location "Localisation"
+python seahawks_client.py
 ```
 
 Le client va :
 1. S'enregistrer auprès du serveur
-2. Scanner le réseau local pour détecter les appareils
-3. Mesurer la latence vers 8.8.8.8
-4. Envoyer ces informations au serveur toutes les minutes
+2. Scanner le réseau local
+3. Envoyer les informations des appareils détectés
+4. Continuer à monitorer le réseau
 
-## Configuration
+## Nouveautés de la version 3.0.0
 
-Le client stocke son ID unique dans un fichier `client_id.txt`. Ce fichier est créé automatiquement lors du premier démarrage.
+- Amélioration de la détection des appareils
+- Réenregistrement automatique si le WAN n'est pas trouvé
+- Meilleure gestion des erreurs
+- Support des réseaux externes
+- Optimisation des performances
+
+## Dépendances
+
+- Python 3.8+
+- Voir `requirements.txt` pour la liste complète
