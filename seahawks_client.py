@@ -10,9 +10,11 @@ from ping3 import ping
 from datetime import datetime
 
 class SeahawksClient:
-    def __init__(self, server_url):
+    def __init__(self, server_url, name, location):
         self.server_url = server_url
-        self.client_id = self.get_or_create_client_id()
+        self.name = name
+        self.location = location
+        self.client_id = None  # Sera défini lors de l'enregistrement
         self.nm = nmap.PortScanner()
         
     def get_or_create_client_id(self):
@@ -94,13 +96,18 @@ class SeahawksClient:
         except Exception:
             return None
     
-    def register_with_server(self, name, location):
-        """Enregistre ce client auprès du serveur"""
+    def register_with_server(self):
+        """Enregistre le client avec le serveur"""
         network_info = self.get_network_info()
+        
+        # Générer un ID unique basé sur l'adresse MAC et l'hostname
+        mac = self.get_mac_address()
+        self.client_id = f"{mac}_{network_info['hostname']}"
+        
         data = {
             'client_id': self.client_id,
-            'name': name,
-            'location': location,
+            'name': self.name,
+            'location': self.location,
             'hostname': network_info['hostname'],
             'ip': network_info['ip'],
             'subnet': network_info['subnet']
@@ -109,20 +116,54 @@ class SeahawksClient:
         print(f"Tentative d'enregistrement avec les données : {data}")
         
         try:
-            print(f"Envoi de la requête à {self.server_url}/api/register")
             response = requests.post(f"{self.server_url}/api/register", json=data)
             print(f"Code de réponse : {response.status_code}")
             print(f"Contenu de la réponse : {response.text}")
             
             if response.status_code == 200:
-                print("Enregistrement réussi !")
+                print("Enregistrement réussi")
                 return True
             else:
-                print(f"Erreur lors de l'enregistrement. Code : {response.status_code}")
+                print("Echec de l'enregistrement du client")
                 return False
         except Exception as e:
-            print(f"Erreur lors de l'enregistrement: {str(e)}")
-            print(f"Type d'erreur : {type(e)}")
+            print(f"Erreur lors de l'enregistrement : {str(e)}")
+            return False
+            
+    def get_mac_address(self):
+        """Récupère l'adresse MAC de l'interface principale"""
+        try:
+            # Obtenir l'interface principale
+            temp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            temp_socket.connect(('8.8.8.8', 80))
+            interface = psutil.net_if_addrs()[temp_socket.getsockname()[0]]
+            temp_socket.close()
+            
+            # Trouver l'adresse MAC
+            for addr in interface:
+                if addr.family == psutil.AF_LINK:
+                    return addr.address.replace(':', '')
+        except:
+            # Fallback : utiliser une adresse MAC aléatoire
+            import uuid
+            return uuid.uuid4().hex[:12]
+    
+    def send_devices_to_server(self, devices):
+        """Envoie la liste des appareils au serveur"""
+        if not self.client_id:
+            print("Client non enregistré, impossible d'envoyer les appareils")
+            return False
+            
+        data = {
+            'client_id': self.client_id,
+            'devices': devices
+        }
+        
+        try:
+            response = requests.post(f"{self.server_url}/api/wans/{self.client_id}/devices", json=data)
+            return response.status_code == 200
+        except Exception as e:
+            print(f"Erreur lors de l'envoi des appareils : {str(e)}")
             return False
     
     def send_update(self):
@@ -157,8 +198,8 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     
-    client = SeahawksClient(args.server)
-    if client.register_with_server(args.name, args.location):
+    client = SeahawksClient(args.server, args.name, args.location)
+    if client.register_with_server():
         print(f"Client enregistre avec succes. ID: {client.client_id}")
         client.start_monitoring()
     else:
