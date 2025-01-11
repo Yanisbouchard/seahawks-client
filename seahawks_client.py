@@ -93,11 +93,23 @@ class SeahawksClient:
             'subnet': network_info['subnet']
         }
         
+        print(f"Tentative d'enregistrement avec les données : {data}")
+        
         try:
+            print(f"Envoi de la requête à {self.server_url}/api/register")
             response = requests.post(f"{self.server_url}/api/register", json=data)
-            return response.status_code == 200
+            print(f"Code de réponse : {response.status_code}")
+            print(f"Contenu de la réponse : {response.text}")
+            
+            if response.status_code == 200:
+                print("Enregistrement réussi !")
+                return True
+            else:
+                print(f"Erreur lors de l'enregistrement. Code : {response.status_code}")
+                return False
         except Exception as e:
             print(f"Erreur lors de l'enregistrement: {str(e)}")
+            print(f"Type d'erreur : {type(e)}")
             return False
     
     def send_update(self):
