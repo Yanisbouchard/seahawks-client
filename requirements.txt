@@ -1,0 +1,4 @@
+requests>=2.26.0
+python-nmap>=0.7.1
+psutil>=5.8.0
+ping3>=4.0.0
