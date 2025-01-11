@@ -1,136 +1,164 @@
 import os
 import json
-import time
 import uuid
+import time
 import socket
 import psutil
-import threading
+import nmap
+import argparse
 import requests
 from datetime import datetime
 from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
-class NetworkMonitor:
-    def __init__(self, server_url, scan_interval=30):
+class SeahawksClient:
+    def __init__(self, server_url, name, location):
         self.server_url = server_url
-        self.scan_interval = scan_interval
-        self.client_id = str(uuid.uuid4())
-        self.hostname = socket.gethostname()
-        self.ip = self._get_ip()
-        self.subnet = self._get_subnet()
-        self.location = os.getenv('LOCATION', 'Non spécifié')
-        self.devices = []
-        self.running = False
-
-    def _get_ip(self):
-        """Récupère l'adresse IP du client"""
+        self.name = name
+        self.location = location
+        self.client_id = self.get_or_create_client_id()
+        self.nm = nmap.PortScanner()
+        
+    def get_or_create_client_id(self):
+        """Récupère ou crée un ID unique pour ce client"""
+        id_file = 'client_id.txt'
+        if os.path.exists(id_file):
+            with open(id_file, 'r') as f:
+                return f.read().strip()
+        
+        client_id = str(uuid.uuid4().hex)
+        with open(id_file, 'w') as f:
+            f.write(client_id)
+        return client_id
+    
+    def get_network_info(self):
+        """Récupère les informations réseau"""
+        hostname = socket.gethostname()
+        ip = socket.gethostbyname(hostname)
+        
+        # Pour Linux, on peut utiliser ip route
+        subnet = None
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            # On se connecte à un DNS Google (ne fait pas vraiment de connexion)
-            s.connect(('8.8.8.8', 80))
+            s.connect(("8.8.8.8", 80))
             ip = s.getsockname()[0]
             s.close()
-            return ip
-        except Exception as e:
-            print(f"Erreur lors de la récupération de l'IP: {str(e)}")
-            return socket.gethostbyname(socket.gethostname())
-
-    def _get_subnet(self):
-        """Récupère le sous-réseau"""
-        try:
-            ip = self._get_ip()
-            # On suppose un masque /24 pour simplifier
-            return '.'.join(ip.split('.')[:3]) + '.0/24'
-        except Exception as e:
-            print(f"Erreur lors de la récupération du masque: {str(e)}")
-            return None
-
+            # On suppose un /24 pour le sous-réseau
+            subnet = '.'.join(ip.split('.')[:3]) + '.0/24'
+        except:
+            pass
+                
+        print(f"Informations réseau détectées : IP={ip}, Subnet={subnet}")
+        return {
+            'hostname': hostname,
+            'ip': ip,
+            'subnet': subnet
+        }
+    
     def scan_network(self):
-        """Scan le réseau pour trouver les appareils"""
+        """Scan le réseau local"""
+        network_info = self.get_network_info()
+        if not network_info['subnet']:
+            return []
+            
+        print(f"Scan du réseau {network_info['subnet']}...")
+        self.nm.scan(hosts=network_info['subnet'], arguments='-sn')
+        
         devices = []
+        for host in self.nm.all_hosts():
+            try:
+                device = {
+                    'ip': host,
+                    'hostname': 'Unknown',
+                    'mac': self.nm[host]['addresses'].get('mac', 'Unknown'),
+                    'vendor': self.nm[host].get('vendor', {}).get(self.nm[host]['addresses'].get('mac', ''), 'Unknown'),
+                    'status': 'up' if self.nm[host]['status']['state'] == 'up' else 'down'
+                }
+                devices.append(device)
+                print(f"Appareil trouvé : {device}")
+            except Exception as e:
+                print(f"Erreur lors du traitement de l'hôte {host}: {str(e)}")
+        
+        return devices
+    
+    def register_with_server(self):
+        """Enregistre ce client auprès du serveur"""
+        network_info = self.get_network_info()
+        data = {
+            'client_id': self.client_id,
+            'name': self.name,
+            'location': self.location,
+            'hostname': network_info['hostname'],
+            'ip': network_info['ip'],
+            'subnet': network_info['subnet']
+        }
+        
+        print(f"Tentative d'enregistrement avec les données : {json.dumps(data, indent=2)}")
         try:
-            # Scan des connexions actives
-            for conn in psutil.net_connections(kind='inet'):
-                if conn.status == 'ESTABLISHED' and conn.raddr:
-                    try:
-                        hostname = socket.gethostbyaddr(conn.raddr.ip)[0]
-                    except:
-                        hostname = conn.raddr.ip
-                    
-                    devices.append({
-                        'ip': conn.raddr.ip,
-                        'hostname': hostname,
-                        'status': 'up'
-                    })
-            self.devices = devices
-        except Exception as e:
-            print(f"Erreur lors du scan réseau: {str(e)}")
-
-    def register(self):
-        """Enregistre le client auprès du serveur"""
-        try:
-            data = {
-                'client_id': self.client_id,
-                'name': self.hostname,
-                'ip': self.ip,
-                'subnet': self.subnet,
-                'location': self.location
-            }
             response = requests.post(f"{self.server_url}/api/register", json=data)
-            return response.status_code == 200
+            print(f"Code de réponse : {response.status_code}")
+            print(f"Contenu de la réponse : {json.dumps(response.json(), indent=2)}\n")
+            
+            if response.status_code == 200:
+                print("Enregistrement réussi")
+                return True
         except Exception as e:
-            print(f"Erreur lors de l'enregistrement: {str(e)}")
-            return False
-
-    def update_devices(self):
-        """Met à jour la liste des appareils sur le serveur"""
+            print(f"Erreur lors de l'enregistrement : {str(e)}")
+        return False
+    
+    def send_devices(self, devices):
+        """Envoie la liste des appareils au serveur"""
+        if not devices:
+            return
+            
+        print(f"Envoi de {len(devices)} appareils au serveur...")
         try:
             data = {
                 'wan_id': self.client_id,
-                'devices': self.devices
+                'devices': devices
             }
             response = requests.post(f"{self.server_url}/api/devices/update", json=data)
-            return response.status_code == 200
+            
+            if response.status_code == 200:
+                print("Appareils mis à jour avec succès")
+                return True
+            else:
+                print(f"Erreur lors de l'envoi des appareils. Code : {response.status_code}")
         except Exception as e:
-            print(f"Erreur lors de la mise à jour des appareils: {str(e)}")
-            return False
-
-    def start_monitoring(self):
-        """Démarre le monitoring"""
-        self.running = True
-        while self.running:
-            self.scan_network()
-            self.update_devices()
-            time.sleep(self.scan_interval)
-
-    def stop_monitoring(self):
-        """Arrête le monitoring"""
-        self.running = False
-
-# Routes API
-@app.route('/api/scan', methods=['POST'])
-def force_scan():
-    """Force un scan réseau"""
-    monitor.scan_network()
-    return jsonify({'success': True})
+            print(f"Erreur lors de l'envoi des appareils : {str(e)}")
+        return False
+    
+    def start_monitoring(self, update_interval=60):
+        """Démarre le monitoring en continu"""
+        if self.register_with_server():
+            print(f"Client enregistre avec succes. ID: {self.client_id}")
+            while True:
+                try:
+                    # Re-enregistrement périodique pour maintenir le statut "online"
+                    self.register_with_server()
+                    
+                    # Scan et envoi des appareils
+                    devices = self.scan_network()
+                    self.send_devices(devices)
+                    
+                    print("\n")  # Ligne vide pour la lisibilité
+                    time.sleep(update_interval)
+                except KeyboardInterrupt:
+                    print("\nArrêt du monitoring...")
+                    break
+                except Exception as e:
+                    print(f"Erreur lors du monitoring : {str(e)}")
+                    time.sleep(update_interval)
 
 if __name__ == '__main__':
-    # Récupération de l'URL du serveur depuis les variables d'environnement
-    server_url = os.getenv('SERVER_URL', 'http://localhost:5000')
+    parser = argparse.ArgumentParser(description='Seahawks Network Monitor Client')
+    parser.add_argument('--server', required=True, help='URL du serveur (ex: http://localhost:5000)')
+    parser.add_argument('--name', required=True, help='Nom du WAN')
+    parser.add_argument('--location', required=True, help='Localisation du WAN')
+    parser.add_argument('--interval', type=int, default=60, help='Intervalle de mise à jour en secondes')
     
-    # Création du moniteur réseau
-    monitor = NetworkMonitor(server_url)
+    args = parser.parse_args()
     
-    # Enregistrement auprès du serveur
-    if not monitor.register():
-        print("Erreur lors de l'enregistrement auprès du serveur")
-        exit(1)
-    
-    # Démarrage du thread de monitoring
-    monitor_thread = threading.Thread(target=monitor.start_monitoring)
-    monitor_thread.daemon = True
-    monitor_thread.start()
-    
-    # Démarrage du serveur Flask
-    app.run(host='0.0.0.0', port=5000)
+    client = SeahawksClient(args.server, args.name, args.location)
+    client.start_monitoring(args.interval)
