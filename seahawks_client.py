@@ -13,7 +13,6 @@ import uuid
 import nmap
 import psutil
 from ping3 import ping
-from flask import jsonify, request
 
 class SeahawksClient:
     def __init__(self, server_url, name, location):
@@ -23,11 +22,10 @@ class SeahawksClient:
         self.location = location
         self.client_id = None
         self.nm = nmap.PortScanner()
-        self.app = Flask(__name__)
         
         # Ajout des routes
-        self.app.add_url_rule('/api/scan', view_func=self.force_scan, methods=['POST'])
-        self.app.add_url_rule('/api/scan_ports', view_func=self.scan_ports_endpoint, methods=['POST'])
+        # self.app.add_url_rule('/api/scan', view_func=self.force_scan, methods=['POST'])
+        # self.app.add_url_rule('/api/scan_ports', view_func=self.scan_ports_endpoint, methods=['POST'])
         
     def get_or_create_client_id(self):
         """Récupère ou crée un ID unique pour ce client"""
@@ -259,23 +257,23 @@ class SeahawksClient:
         """Force un scan réseau"""
         try:
             devices = self.scan_network()
-            return jsonify({'success': True, 'devices': devices})
+            return {'success': True, 'devices': devices}
         except Exception as e:
             print(f"Erreur lors du scan: {str(e)}")
-            return jsonify({'error': str(e)}), 500
+            return {'error': str(e)}
             
     def scan_ports_endpoint(self):
         """Endpoint pour scanner les ports d'une IP"""
         try:
-            ip = request.json.get('ip')
+            ip = 'ip'
             if not ip:
-                return jsonify({'error': 'IP manquante'}), 400
+                return {'error': 'IP manquante'}
                 
             ports = self.scan_ports(ip)
-            return jsonify({'success': True, 'ports': ports})
+            return {'success': True, 'ports': ports}
         except Exception as e:
             print(f"Erreur lors du scan des ports: {str(e)}")
-            return jsonify({'error': str(e)}), 500
+            return {'error': str(e)}
 
 if __name__ == '__main__':
     import argparse
@@ -293,4 +291,3 @@ if __name__ == '__main__':
         client.start_monitoring()
     else:
         print("Echec de l'enregistrement du client")
-    client.app.run(debug=True)
