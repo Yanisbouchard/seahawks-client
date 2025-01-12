@@ -106,9 +106,13 @@ class SeahawksClient:
             'subnet': network_info['subnet']
         }
         
+        # Assure-toi que l'URL se termine par /api/register
+        api_url = self.server_url.rstrip('/') + '/api/register'
+        logging.info(f"URL d'enregistrement : {api_url}")
         logging.info(f"Tentative d'enregistrement avec les données : {json.dumps(data, indent=2)}")
+        
         try:
-            response = requests.post(f"{self.server_url}/api/register", json=data)
+            response = requests.post(api_url, json=data)
             logging.info(f"Code de réponse : {response.status_code}")
             
             try:
@@ -122,11 +126,13 @@ class SeahawksClient:
                 return True
             elif response.status_code == 404:
                 logging.error("URL d'enregistrement non trouvée. Vérifiez l'URL du serveur.")
+                logging.error("L'URL doit être de la forme : http://ip:port")
             else:
                 logging.error(f"Erreur lors de l'enregistrement. Code : {response.status_code}")
                 logging.error(f"Réponse du serveur : {response.text}")
         except requests.exceptions.ConnectionError:
-            logging.error(f"Impossible de se connecter au serveur {self.server_url}")
+            logging.error(f"Impossible de se connecter au serveur {api_url}")
+            logging.error("Vérifiez que le serveur est démarré et accessible")
         except Exception as e:
             logging.error(f"Erreur lors de l'enregistrement : {str(e)}")
         return False
