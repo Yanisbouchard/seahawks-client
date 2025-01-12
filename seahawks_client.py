@@ -162,20 +162,34 @@ class SeahawksClient:
     
     def update_devices(self):
         """Met à jour la liste des appareils"""
-        devices = self.scan_network()
-        latency = self.get_network_latency()
-        cpu_load = self.get_system_load()
-        
-        data = {
-            'client_id': self.client_id,
-            'devices': devices,
-            'network_stats': {
-                'latency': latency,
-                'cpu_load': cpu_load
-            }
-        }
-        
         try:
+            devices = self.scan_network()
+            latency = self.get_network_latency()
+            cpu_load = self.get_system_load()
+            
+            # Vérifie que chaque appareil a des ports valides
+            for device in devices:
+                if not isinstance(device.get('open_ports'), list):
+                    device['open_ports'] = []
+                else:
+                    # Vérifie que chaque port est bien formaté
+                    valid_ports = []
+                    for port in device['open_ports']:
+                        if isinstance(port, dict) and 'port' in port and 'service' in port:
+                            valid_ports.append(port)
+                    device['open_ports'] = valid_ports
+            
+            data = {
+                'client_id': self.client_id,
+                'devices': devices,
+                'network_stats': {
+                    'latency': latency,
+                    'cpu_load': cpu_load
+                }
+            }
+            
+            logging.info(f"Envoi des données au serveur: {json.dumps(data, indent=2)}")
+            
             response = requests.post(f"{self.server_url}/api/devices/update", json=data)
             if response.status_code == 200:
                 logging.info("Mise à jour des appareils réussie")
