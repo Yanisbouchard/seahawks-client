@@ -1,6 +1,6 @@
 flask==3.0.0
 requests==2.31.0
-python-nmap==0.7.1
-psutil==5.9.6
 ping3==4.0.4
+python-nmap==0.7.1
+psutil==5.9.7
 scapy==2.5.0

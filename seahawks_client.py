@@ -60,19 +60,30 @@ class SeahawksClient:
             nm = nmap.PortScanner()
             nm.scan(ip, ports, arguments='-sT -T4')
             open_ports = []
+            
             if ip in nm.all_hosts():
                 for proto in nm[ip].all_protocols():
                     ports = nm[ip][proto].keys()
                     for port in ports:
-                        if nm[ip][proto][port]['state'] == 'open':
+                        state = nm[ip][proto][port]['state']
+                        if state == 'open':
                             service = nm[ip][proto][port].get('name', 'unknown')
-                            open_ports.append({
-                                'port': port,
+                            port_info = {
+                                'port': int(port),
                                 'service': service
-                            })
+                            }
+                            open_ports.append(port_info)
+                            logging.info(f"Port trouvé sur {ip}: {port_info}")
+            
+            if not open_ports:
+                logging.info(f"Aucun port ouvert trouvé pour {ip}")
             return open_ports
+            
+        except nmap.PortScannerError as e:
+            logging.error(f"Erreur nmap lors du scan des ports de {ip}: {str(e)}")
+            return []
         except Exception as e:
-            logging.error(f"Erreur lors du scan des ports : {str(e)}")
+            logging.error(f"Erreur inattendue lors du scan des ports de {ip}: {str(e)}")
             return []
 
     def scan_network(self):
