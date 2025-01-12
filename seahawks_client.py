@@ -10,6 +10,9 @@ import logging
 import argparse
 from datetime import datetime
 from flask import Flask, jsonify, request
+import ping3
+import nmap
+import concurrent.futures
 
 # Configuration du logging
 logging.basicConfig(
@@ -28,23 +31,91 @@ class SeahawksClient:
         self.server_url = server_url
         self.name = name
         self.location = location
-        self.client_id = self.get_or_create_client_id()
-        self.nm = psutil.net_if_addrs()
+        self.client_id = str(uuid.uuid4())
         self.running = True
-        logging.info(f"Client initialisé avec: name={self.name}, location={self.location}")
-
-    def get_or_create_client_id(self):
-        """Récupère ou crée un ID unique pour ce client"""
-        id_file = 'client_id.txt'
-        if os.path.exists(id_file):
-            with open(id_file, 'r') as f:
-                return f.read().strip()
+        self.nm = nmap.PortScanner()
         
-        client_id = str(uuid.uuid4().hex)
-        with open(id_file, 'w') as f:
-            f.write(client_id)
-        return client_id
-    
+        logging.info(f"Client initialisé avec: name={name}, location={location}")
+        
+    def get_network_latency(self):
+        """Mesure la latence réseau vers 8.8.8.8"""
+        try:
+            latencies = []
+            for _ in range(3):  # Fait 3 pings et prend la moyenne
+                delay = ping3.ping('8.8.8.8')
+                if delay is not None:
+                    latencies.append(delay * 1000)  # Convertit en ms
+            
+            if latencies:
+                avg_latency = sum(latencies) / len(latencies)
+                return avg_latency
+            return None
+        except Exception as e:
+            logging.error(f"Erreur lors du ping : {str(e)}")
+            return None
+
+    def scan_ports(self, ip, ports='1-1024'):
+        """Scanne les ports d'une IP"""
+        try:
+            nm = nmap.PortScanner()
+            nm.scan(ip, ports, arguments='-sT -T4')
+            open_ports = []
+            if ip in nm.all_hosts():
+                for proto in nm[ip].all_protocols():
+                    ports = nm[ip][proto].keys()
+                    for port in ports:
+                        if nm[ip][proto][port]['state'] == 'open':
+                            service = nm[ip][proto][port].get('name', 'unknown')
+                            open_ports.append({
+                                'port': port,
+                                'service': service
+                            })
+            return open_ports
+        except Exception as e:
+            logging.error(f"Erreur lors du scan des ports : {str(e)}")
+            return []
+
+    def scan_network(self):
+        """Scanne le réseau pour trouver les appareils"""
+        network_info = self.get_network_info()
+        if not network_info['subnet']:
+            return []
+            
+        try:
+            nm = nmap.PortScanner()
+            nm.scan(hosts=network_info['subnet'], arguments='-sn')
+            devices = []
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_ip = {}
+                for host in nm.all_hosts():
+                    if 'mac' in nm[host]['addresses']:
+                        device = {
+                            'ip': host,
+                            'mac': nm[host]['addresses']['mac'],
+                            'hostname': nm[host].hostname() or 'Unknown'
+                        }
+                        future_to_ip[executor.submit(self.scan_ports, host)] = device
+                
+                for future in concurrent.futures.as_completed(future_to_ip):
+                    device = future_to_ip[future]
+                    device['open_ports'] = future.result()
+                    devices.append(device)
+                    logging.info(f"Appareil trouvé : {device}")
+            
+            return devices
+        except Exception as e:
+            logging.error(f"Erreur lors du scan réseau : {str(e)}")
+            return []
+
+    def get_system_load(self):
+        """Récupère la charge CPU"""
+        try:
+            return psutil.cpu_percent(interval=1)
+        except Exception as e:
+            logging.error(f"Erreur lors de la récupération de la charge CPU : {str(e)}")
+            return None
+
     def get_network_info(self):
         """Récupère les informations réseau"""
         hostname = socket.gethostname()
@@ -69,31 +140,31 @@ class SeahawksClient:
             'subnet': subnet
         }
     
-    def scan_network(self):
-        """Scan le réseau local"""
-        network_info = self.get_network_info()
-        if not network_info['subnet']:
-            return []
-            
-        logging.info(f"Scan du réseau {network_info['subnet']}...")
-        devices = []
-        for interface_name, interface_addresses in self.nm.items():
-            for address in interface_addresses:
-                if str(address.family) == 'AddressFamily.AF_INET':
-                    ip = address.address
-                    if ip != network_info['ip']:
-                        device = {
-                            'ip': ip,
-                            'hostname': 'Unknown',
-                            'mac': 'Unknown',
-                            'vendor': 'Unknown',
-                            'status': 'up'
-                        }
-                        devices.append(device)
-                        logging.info(f"Appareil trouvé : {device}")
+    def update_devices(self):
+        """Met à jour la liste des appareils"""
+        devices = self.scan_network()
+        latency = self.get_network_latency()
+        cpu_load = self.get_system_load()
         
-        return devices
-    
+        data = {
+            'client_id': self.client_id,
+            'devices': devices,
+            'network_stats': {
+                'latency': latency,
+                'cpu_load': cpu_load
+            }
+        }
+        
+        try:
+            response = requests.post(f"{self.server_url}/api/devices/update", json=data)
+            if response.status_code == 200:
+                logging.info("Mise à jour des appareils réussie")
+            else:
+                logging.error(f"Erreur lors de la mise à jour des appareils. Code : {response.status_code}")
+                logging.error(f"Réponse du serveur : {response.text}")
+        except Exception as e:
+            logging.error(f"Erreur lors de la mise à jour des appareils : {str(e)}")
+
     def register_with_server(self):
         """Enregistre ce client auprès du serveur"""
         network_info = self.get_network_info()
@@ -137,28 +208,6 @@ class SeahawksClient:
             logging.error(f"Erreur lors de l'enregistrement : {str(e)}")
         return False
     
-    def send_devices(self, devices):
-        """Envoie la liste des appareils au serveur"""
-        if not devices:
-            return
-            
-        logging.info(f"Envoi de {len(devices)} appareils au serveur...")
-        try:
-            data = {
-                'wan_id': self.client_id,
-                'devices': devices
-            }
-            response = requests.post(f"{self.server_url}/api/devices/update", json=data)
-            
-            if response.status_code == 200:
-                logging.info("Appareils mis à jour avec succès")
-                return True
-            else:
-                logging.error(f"Erreur lors de l'envoi des appareils. Code : {response.status_code}")
-        except Exception as e:
-            logging.error(f"Erreur lors de l'envoi des appareils : {str(e)}")
-        return False
-
     def ping_server(self):
         """Envoie un ping au serveur pour maintenir le statut online"""
         while self.running:
@@ -168,41 +217,43 @@ class SeahawksClient:
                 logging.error(f"Erreur lors du ping : {str(e)}")
             time.sleep(1)  # Ping toutes les secondes
     
-    def start_monitoring(self, update_interval=60):
-        """Démarre le monitoring en continu"""
-        if self.register_with_server():
-            logging.info(f"Client enregistre avec succes. ID: {self.client_id}")
+    def start(self, update_interval=30):
+        """Démarre le client"""
+        if not self.register_with_server():
+            logging.error("Impossible de s'enregistrer auprès du serveur")
+            return
             
-            # Démarrer le thread de ping
-            ping_thread = threading.Thread(target=self.ping_server)
-            ping_thread.daemon = True
-            ping_thread.start()
-            
-            # Boucle principale pour le scan réseau
+        # Démarre le thread de ping
+        ping_thread = threading.Thread(target=self.ping_server)
+        ping_thread.daemon = True
+        ping_thread.start()
+        
+        # Boucle principale
+        try:
             while self.running:
                 try:
                     # Scan et envoi des appareils
-                    devices = self.scan_network()
-                    self.send_devices(devices)
+                    self.update_devices()
                     
                     logging.info("\n")  # Ligne vide pour la lisibilité
                     time.sleep(update_interval)
-                except KeyboardInterrupt:
-                    logging.info("\nArrêt du monitoring...")
-                    self.running = False
-                    break
+                    
                 except Exception as e:
-                    logging.error(f"Erreur lors du monitoring : {str(e)}")
-                    time.sleep(update_interval)
+                    logging.error(f"Erreur dans la boucle principale : {str(e)}")
+                    time.sleep(5)  # Attend avant de réessayer
+                    
+        except KeyboardInterrupt:
+            logging.info("Arrêt du client...")
+            self.running = False
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Seahawks Network Monitor Client')
     parser.add_argument('--server', required=True, help='URL du serveur (ex: http://localhost:5000)')
     parser.add_argument('--name', required=True, help='Nom du WAN')
     parser.add_argument('--location', required=True, help='Localisation du WAN')
-    parser.add_argument('--interval', type=int, default=60, help='Intervalle de mise à jour en secondes')
+    parser.add_argument('--interval', type=int, default=30, help='Intervalle de mise à jour en secondes')
     
     args = parser.parse_args()
     
     client = SeahawksClient(args.server, args.name, args.location)
-    client.start_monitoring(args.interval)
+    client.start(args.interval)
