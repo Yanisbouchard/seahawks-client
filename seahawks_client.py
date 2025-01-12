@@ -1,15 +1,24 @@
 import os
 import json
-import uuid
 import time
+import uuid
 import socket
 import psutil
-import nmap
-import argparse
-import requests
 import threading
+import requests
+import logging
 from datetime import datetime
 from flask import Flask, jsonify, request
+
+# Configuration du logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('seahawks_client.log'),
+        logging.StreamHandler()
+    ]
+)
 
 app = Flask(__name__)
 
@@ -19,9 +28,10 @@ class SeahawksClient:
         self.name = name
         self.location = location
         self.client_id = self.get_or_create_client_id()
-        self.nm = nmap.PortScanner()
+        self.nm = psutil.net_if_addrs()
         self.running = True
-        
+        logging.info(f"Client initialisé avec: name={self.name}, location={self.location}")
+
     def get_or_create_client_id(self):
         """Récupère ou crée un ID unique pour ce client"""
         id_file = 'client_id.txt'
@@ -51,7 +61,7 @@ class SeahawksClient:
         except:
             pass
                 
-        print(f"Informations réseau détectées : IP={ip}, Subnet={subnet}")
+        logging.info(f"Informations réseau détectées : IP={ip}, Subnet={subnet}")
         return {
             'hostname': hostname,
             'ip': ip,
@@ -64,23 +74,22 @@ class SeahawksClient:
         if not network_info['subnet']:
             return []
             
-        print(f"Scan du réseau {network_info['subnet']}...")
-        self.nm.scan(hosts=network_info['subnet'], arguments='-sn')
-        
+        logging.info(f"Scan du réseau {network_info['subnet']}...")
         devices = []
-        for host in self.nm.all_hosts():
-            try:
-                device = {
-                    'ip': host,
-                    'hostname': 'Unknown',
-                    'mac': self.nm[host]['addresses'].get('mac', 'Unknown'),
-                    'vendor': self.nm[host].get('vendor', {}).get(self.nm[host]['addresses'].get('mac', ''), 'Unknown'),
-                    'status': 'up' if self.nm[host]['status']['state'] == 'up' else 'down'
-                }
-                devices.append(device)
-                print(f"Appareil trouvé : {device}")
-            except Exception as e:
-                print(f"Erreur lors du traitement de l'hôte {host}: {str(e)}")
+        for interface_name, interface_addresses in self.nm.items():
+            for address in interface_addresses:
+                if str(address.family) == 'AddressFamily.AF_INET':
+                    ip = address.address
+                    if ip != network_info['ip']:
+                        device = {
+                            'ip': ip,
+                            'hostname': 'Unknown',
+                            'mac': 'Unknown',
+                            'vendor': 'Unknown',
+                            'status': 'up'
+                        }
+                        devices.append(device)
+                        logging.info(f"Appareil trouvé : {device}")
         
         return devices
     
@@ -96,17 +105,17 @@ class SeahawksClient:
             'subnet': network_info['subnet']
         }
         
-        print(f"Tentative d'enregistrement avec les données : {json.dumps(data, indent=2)}")
+        logging.info(f"Tentative d'enregistrement avec les données : {json.dumps(data, indent=2)}")
         try:
             response = requests.post(f"{self.server_url}/api/register", json=data)
-            print(f"Code de réponse : {response.status_code}")
-            print(f"Contenu de la réponse : {json.dumps(response.json(), indent=2)}\n")
+            logging.info(f"Code de réponse : {response.status_code}")
+            logging.info(f"Contenu de la réponse : {json.dumps(response.json(), indent=2)}\n")
             
             if response.status_code == 200:
-                print("Enregistrement réussi")
+                logging.info("Enregistrement réussi")
                 return True
         except Exception as e:
-            print(f"Erreur lors de l'enregistrement : {str(e)}")
+            logging.error(f"Erreur lors de l'enregistrement : {str(e)}")
         return False
     
     def send_devices(self, devices):
@@ -114,7 +123,7 @@ class SeahawksClient:
         if not devices:
             return
             
-        print(f"Envoi de {len(devices)} appareils au serveur...")
+        logging.info(f"Envoi de {len(devices)} appareils au serveur...")
         try:
             data = {
                 'wan_id': self.client_id,
@@ -123,12 +132,12 @@ class SeahawksClient:
             response = requests.post(f"{self.server_url}/api/devices/update", json=data)
             
             if response.status_code == 200:
-                print("Appareils mis à jour avec succès")
+                logging.info("Appareils mis à jour avec succès")
                 return True
             else:
-                print(f"Erreur lors de l'envoi des appareils. Code : {response.status_code}")
+                logging.error(f"Erreur lors de l'envoi des appareils. Code : {response.status_code}")
         except Exception as e:
-            print(f"Erreur lors de l'envoi des appareils : {str(e)}")
+            logging.error(f"Erreur lors de l'envoi des appareils : {str(e)}")
         return False
 
     def ping_server(self):
@@ -137,13 +146,13 @@ class SeahawksClient:
             try:
                 self.register_with_server()
             except Exception as e:
-                print(f"Erreur lors du ping : {str(e)}")
+                logging.error(f"Erreur lors du ping : {str(e)}")
             time.sleep(1)  # Ping toutes les secondes
     
     def start_monitoring(self, update_interval=60):
         """Démarre le monitoring en continu"""
         if self.register_with_server():
-            print(f"Client enregistre avec succes. ID: {self.client_id}")
+            logging.info(f"Client enregistre avec succes. ID: {self.client_id}")
             
             # Démarrer le thread de ping
             ping_thread = threading.Thread(target=self.ping_server)
@@ -157,14 +166,14 @@ class SeahawksClient:
                     devices = self.scan_network()
                     self.send_devices(devices)
                     
-                    print("\n")  # Ligne vide pour la lisibilité
+                    logging.info("\n")  # Ligne vide pour la lisibilité
                     time.sleep(update_interval)
                 except KeyboardInterrupt:
-                    print("\nArrêt du monitoring...")
+                    logging.info("\nArrêt du monitoring...")
                     self.running = False
                     break
                 except Exception as e:
-                    print(f"Erreur lors du monitoring : {str(e)}")
+                    logging.error(f"Erreur lors du monitoring : {str(e)}")
                     time.sleep(update_interval)
 
 if __name__ == '__main__':
