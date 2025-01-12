@@ -104,17 +104,26 @@ class SeahawksClient:
                         device = {
                             'ip': host,
                             'mac': nm[host]['addresses']['mac'],
-                            'hostname': nm[host].hostname() or 'Unknown'
+                            'hostname': nm[host].hostname() or 'Unknown',
+                            'open_ports': []  # Initialisation vide par défaut
                         }
                         future_to_ip[executor.submit(self.scan_ports, host)] = device
                 
                 for future in concurrent.futures.as_completed(future_to_ip):
                     device = future_to_ip[future]
-                    device['open_ports'] = future.result()
+                    try:
+                        ports = future.result()
+                        if ports:  # Ne met à jour que si des ports ont été trouvés
+                            device['open_ports'] = ports
+                            logging.info(f"Ports trouvés pour {device['ip']}: {ports}")
+                        else:
+                            logging.info(f"Aucun port trouvé pour {device['ip']}")
+                    except Exception as e:
+                        logging.error(f"Erreur lors de la récupération des ports pour {device['ip']}: {str(e)}")
                     devices.append(device)
-                    logging.info(f"Appareil trouvé : {device}")
             
             return devices
+            
         except Exception as e:
             logging.error(f"Erreur lors du scan réseau : {str(e)}")
             return []
