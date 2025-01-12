@@ -110,11 +110,23 @@ class SeahawksClient:
         try:
             response = requests.post(f"{self.server_url}/api/register", json=data)
             logging.info(f"Code de réponse : {response.status_code}")
-            logging.info(f"Contenu de la réponse : {json.dumps(response.json(), indent=2)}\n")
+            
+            try:
+                response_json = response.json()
+                logging.info(f"Contenu de la réponse : {json.dumps(response_json, indent=2)}\n")
+            except ValueError:
+                logging.error(f"La réponse n'est pas du JSON valide : {response.text}")
             
             if response.status_code == 200:
                 logging.info("Enregistrement réussi")
                 return True
+            elif response.status_code == 404:
+                logging.error("URL d'enregistrement non trouvée. Vérifiez l'URL du serveur.")
+            else:
+                logging.error(f"Erreur lors de l'enregistrement. Code : {response.status_code}")
+                logging.error(f"Réponse du serveur : {response.text}")
+        except requests.exceptions.ConnectionError:
+            logging.error(f"Impossible de se connecter au serveur {self.server_url}")
         except Exception as e:
             logging.error(f"Erreur lors de l'enregistrement : {str(e)}")
         return False
